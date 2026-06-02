@@ -1,0 +1,10 @@
+pillow
+pandas
+openpyxl
+gender-guesser
+opencv-python
+pytesseract
+fastapi
+uvicorn
+python-multipart
+requests
