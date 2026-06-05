@@ -277,8 +277,9 @@ def email_task(session_id, sender_email, sender_password, subject, body, selecte
         # Try Port 465 first (SSL)
         server = None
         try:
-            print(f"Connecting to smtp.gmail.com:465 (SSL)...")
-            server = smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=30)
+            print(f"Connecting to smtp.gmail.com:587 (SSL)...")
+            server = smtplib.SMTP("smtp.gmail.com", 587, timeout=30)
+            server.starttls(context=context)
             server.login(sender_email, sender_password)
         except Exception as e:
             print(f"SSL move failed: {e}. Trying Port 587 (STARTTLS)...")
