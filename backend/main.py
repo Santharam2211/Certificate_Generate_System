@@ -17,6 +17,10 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = FastAPI()
 
@@ -238,11 +242,28 @@ async def download(s_id: str):
     return JSONResponse(status_code=404, content={"error": "Not found"})
 
 from fastapi import BackgroundTasks
+import smtplib
+import ssl
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+
 # Global status tracker
 tasks_status = {}
 
 def email_task(session_id, sender_email, sender_password, subject, body, selected_indices=None):
     tasks_status[session_id] = "sending"
+    
+    # Use environment variables if not provided
+    sender_email = sender_email or os.getenv("SENDER_EMAIL")
+    sender_password = sender_password or os.getenv("SENDER_PASSWORD")
+    
+    if not sender_email or not sender_password:
+        print("Missing email credentials.")
+        tasks_status[session_id] = "failed"
+        return
+
     try:
         s_dir = os.path.join(OUTPUT_DIR, session_id)
         excel_path = os.path.join(s_dir, "data.xlsx")
@@ -253,10 +274,25 @@ def email_task(session_id, sender_email, sender_password, subject, body, selecte
         df = pd.read_excel(excel_path)
         context = ssl.create_default_context()
         
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+        # Try Port 465 first (SSL)
+        server = None
+        try:
+            print(f"Connecting to smtp.gmail.com:465 (SSL)...")
+            server = smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=30)
             server.login(sender_email, sender_password)
+        except Exception as e:
+            print(f"SSL move failed: {e}. Trying Port 587 (STARTTLS)...")
+            try:
+                server = smtplib.SMTP("smtp.gmail.com", 587, timeout=30)
+                server.starttls(context=context)
+                server.login(sender_email, sender_password)
+            except Exception as e2:
+                print(f"Both SMTP ports failed: {e2}")
+                tasks_status[session_id] = "failed"
+                return
+
+        with server:
             for i, row in df.iterrows():
-                # Selective filter
                 if selected_indices is not None and i not in selected_indices:
                     continue
                     
@@ -285,9 +321,12 @@ def email_task(session_id, sender_email, sender_password, subject, body, selecte
                 
                 try:
                     server.send_message(msg)
-                except: pass
+                    print(f"Sent email to {email_to}")
+                except Exception as e:
+                    print(f"Failed to send to {email_to}: {e}")
+                    pass
         tasks_status[session_id] = "completed"
-    except:
+    except Exception as e:
         traceback.print_exc()
         tasks_status[session_id] = "failed"
 
@@ -299,7 +338,7 @@ async def send_emails(
     sender_password: str = Form(...),
     subject: str = Form(...),
     body: str = Form(...),
-    selected_indices: str = Form("[]")  # JSON string of indices
+    selected_indices: str = Form("[]")
 ):
     s_dir = os.path.join(OUTPUT_DIR, session_id)
     if not os.path.exists(s_dir):
