@@ -12,14 +12,13 @@ function App() {
   const [fontSearch, setFontSearch] = useState("");
   const [placeholders, setPlaceholders] = useState([
     { key: "Name", color: "#960000" },
-    { key: "Year&Department", color: "#960000" },
-    { key: "Role", color: "#0046a0" }
+    { key: "Year&Department", color: "#960000" }
   ]);
   const [pos, setPos] = useState({ x: 260, y: 815, width: 1500 });
 
   // Email States
   const [emailConfig, setEmailConfig] = useState({
-    senderEmail: "santharamsenthilkumar17@gmail.com",
+    senderEmail: "",
     senderPassword: "",
     subject: "Your Digital Certificate - DigiFest 2K26",
     body: "Dear {Name},\n\nCongratulations! Please find your certificate attached.\n\nBest Regards,\nTeam DigiFlash"
@@ -136,16 +135,14 @@ function App() {
   };
 
   const handleSendEmails = async () => {
-    if (!emailConfig.senderPassword) {
-      alert("Please enter Sender App Password");
-      return;
-    }
+    // Note: If you leave the password/email fields blank, the backend will 
+    // attempt to use environment variables set on the server (e.g., Render Env Vars).
     if (selectedIndices.length === 0) {
       alert("Please select at least one recipient");
       return;
     }
     setEmailStatus({ sending: true, success: null, errors: [], progress: "sending" });
-    
+
     const formData = new FormData();
     formData.append("session_id", status.session_id);
     formData.append("sender_email", emailConfig.senderEmail);
@@ -183,9 +180,9 @@ function App() {
     <div className="container">
       {(status.loading || emailStatus.sending || isPreviewLoading) && (
         <Loader message={
-          isPreviewLoading ? "Generating Preview..." : 
-          status.loading ? "Generating Certificates..." : 
-          "Initiating Email Delivery..."
+          isPreviewLoading ? "Generating Preview..." :
+            status.loading ? "Generating Certificates..." :
+              "Initiating Email Delivery..."
         } />
       )}
       <header>
@@ -279,11 +276,15 @@ function App() {
 
           <section style={{ marginTop: '2rem', borderTop: '1px solid var(--glass-border)', paddingTop: '1rem' }}>
             <h3 style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Mail size={18} /> Email Delivery
+              <Mail size={18} /> Email Delivery (Gmail)
             </h3>
             <div className="form-group">
               <label>Google App Password</label>
               <input type="password" placeholder="xxxx xxxx xxxx xxxx" value={emailConfig.senderPassword} onChange={e => setEmailConfig({ ...emailConfig, senderPassword: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Sender Gmail</label>
+              <input placeholder="your-email@gmail.com" value={emailConfig.senderEmail} onChange={e => setEmailConfig({ ...emailConfig, senderEmail: e.target.value })} />
             </div>
             <div className="form-group">
               <label>Subject</label>
@@ -349,9 +350,9 @@ function App() {
                       <div style={{ marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid var(--glass-border)' }}>
                         <h4 style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>Smart Selection</h4>
                         <div style={{ display: 'flex', gap: '10px' }}>
-                          <input 
-                            placeholder="Enter range (e.g. 1-10, 15, 20-25)" 
-                            style={{ flex: 1, fontSize: '0.8rem' }} 
+                          <input
+                            placeholder="Enter range (e.g. 1-10, 15, 20-25)"
+                            style={{ flex: 1, fontSize: '0.8rem' }}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
                                 const val = e.target.value;
