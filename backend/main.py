@@ -211,13 +211,22 @@ async def generate_certificates(
             safe_name = re.sub(r'[^a-zA-Z0-9]', '_', name_val)
             file_name = f"{i}_{safe_name}.png"
             img.save(os.path.join(s_dir, file_name))
-            generated.append(file_name)
+            generated.append({
+                "index": i,
+                "name": name_val,
+                "email": str(row.get("Email", "")),
+                "file": file_name
+            })
             
         zip_path = os.path.join(OUTPUT_DIR, f"{s_id}.zip")
         with zipfile.ZipFile(zip_path, 'w') as z:
-            for f in generated: z.write(os.path.join(s_dir, f), f)
+            for item in generated: z.write(os.path.join(s_dir, item["file"]), item["file"])
             
-        return {"session_id": s_id, "zip_url": f"/download/{s_id}", "count": len(generated)}
+        return {
+            "session_id": s_id, 
+            "zip_url": f"/download/{s_id}", 
+            "recipients": generated
+        }
     except Exception:
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": "Generation failed"})
@@ -228,34 +237,31 @@ async def download(s_id: str):
     if os.path.exists(path): return FileResponse(path, filename="certificates.zip")
     return JSONResponse(status_code=404, content={"error": "Not found"})
 
-@app.post("/send-emails")
-async def send_emails(
-    session_id: str = Form(...),
-    sender_email: str = Form(...),
-    sender_password: str = Form(...),
-    subject: str = Form(...),
-    body: str = Form(...)
-):
+from fastapi import BackgroundTasks
+# Global status tracker
+tasks_status = {}
+
+def email_task(session_id, sender_email, sender_password, subject, body, selected_indices=None):
+    tasks_status[session_id] = "sending"
     try:
         s_dir = os.path.join(OUTPUT_DIR, session_id)
         excel_path = os.path.join(s_dir, "data.xlsx")
-        if not os.path.exists(excel_path):
-            raise Exception("Session data expired or missing.")
+        if not os.path.exists(excel_path): 
+            tasks_status[session_id] = "failed"
+            return
             
         df = pd.read_excel(excel_path)
-        
-        # Email setup
         context = ssl.create_default_context()
-        success_count = 0
-        error_logs = []
         
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
             server.login(sender_email, sender_password)
-            
             for i, row in df.iterrows():
-                email_to = row.get("Email")
-                if pd.isna(email_to) or not str(email_to).strip():
+                # Selective filter
+                if selected_indices is not None and i not in selected_indices:
                     continue
+                    
+                email_to = row.get("Email")
+                if pd.isna(email_to) or not str(email_to).strip(): continue
                 
                 name_val = str(row.get("Name", f"Cert_{i}"))
                 safe_name = re.sub(r'[^a-zA-Z0-9]', '_', name_val)
@@ -279,14 +285,38 @@ async def send_emails(
                 
                 try:
                     server.send_message(msg)
-                    success_count += 1
-                except Exception as e:
-                    error_logs.append(f"Failed to send to {email_to}: {str(e)}")
-                    
-        return {"success": success_count, "errors": error_logs}
-    except Exception as e:
+                except: pass
+        tasks_status[session_id] = "completed"
+    except:
         traceback.print_exc()
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        tasks_status[session_id] = "failed"
+
+@app.post("/send-emails")
+async def send_emails(
+    background_tasks: BackgroundTasks,
+    session_id: str = Form(...),
+    sender_email: str = Form(...),
+    sender_password: str = Form(...),
+    subject: str = Form(...),
+    body: str = Form(...),
+    selected_indices: str = Form("[]")  # JSON string of indices
+):
+    s_dir = os.path.join(OUTPUT_DIR, session_id)
+    if not os.path.exists(s_dir):
+        return JSONResponse(status_code=404, content={"error": "Session not found"})
+        
+    try:
+        indices = json.loads(selected_indices)
+    except:
+        indices = None
+        
+    background_tasks.add_task(email_task, session_id, sender_email, sender_password, subject, body, indices)
+    return {"message": "Background sending started", "status": "success"}
+
+@app.get("/email-status/{session_id}")
+async def get_email_status(session_id: str):
+    status = tasks_status.get(session_id, "unknown")
+    return {"status": status}
 
 if __name__ == "__main__":
     import uvicorn
