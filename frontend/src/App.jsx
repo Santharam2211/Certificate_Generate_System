@@ -195,7 +195,7 @@ function App() {
         <div className="glass-card">
           <section>
             <h3 style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Settings size={18} /> 1. Configuration
+              <Settings size={18} /> Configuration
             </h3>
             <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
               <div className="form-group">
@@ -276,23 +276,16 @@ function App() {
 
           <section style={{ marginTop: '2rem', borderTop: '1px solid var(--glass-border)', paddingTop: '1rem' }}>
             <h3 style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Mail size={18} /> Email Delivery (Gmail)
+              <Mail size={18} /> Email Delivery
             </h3>
-            <div className="form-group">
-              <label>Google App Password</label>
-              <input type="password" placeholder="xxxx xxxx xxxx xxxx" value={emailConfig.senderPassword} onChange={e => setEmailConfig({ ...emailConfig, senderPassword: e.target.value })} />
-            </div>
-            <div className="form-group">
-              <label>Sender Gmail</label>
-              <input placeholder="your-email@gmail.com" value={emailConfig.senderEmail} onChange={e => setEmailConfig({ ...emailConfig, senderEmail: e.target.value })} />
-            </div>
-            <div className="form-group">
+
+            <div className="form-group-1">
               <label>Subject</label>
               <input value={emailConfig.subject} onChange={e => setEmailConfig({ ...emailConfig, subject: e.target.value })} />
             </div>
-            <div className="form-group">
+            <div className="form-group-2">
               <label>Mail Body</label>
-              <textarea rows={3} value={emailConfig.body} onChange={e => setEmailConfig({ ...emailConfig, body: e.target.value })} />
+              <textarea rows={6} value={emailConfig.body} onChange={e => setEmailConfig({ ...emailConfig, body: e.target.value })} />
             </div>
           </section>
         </div>
