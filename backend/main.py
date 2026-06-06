@@ -13,6 +13,8 @@ import json
 import traceback
 import smtplib
 import ssl
+import base64
+import requests
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -252,15 +254,97 @@ from email import encoders
 # Global status tracker
 tasks_status = {}
 
-def email_task(session_id, sender_email, sender_password, subject, body, selected_indices=None):
+def send_via_api(session_id, api_key, sender_email, subject, body, selected_indices=None):
+    """Sends emails via Brevo HTTP API (Works on Render)"""
     tasks_status[session_id] = "sending"
+    try:
+        s_dir = os.path.join(OUTPUT_DIR, session_id)
+        excel_path = os.path.join(s_dir, "data.xlsx")
+        if not os.path.exists(excel_path):
+            tasks_status[session_id] = "failed"
+            return
+            
+        df = pd.read_excel(excel_path)
+        url = "https://api.brevo.com/v3/smtp/email"
+        headers = {
+            "accept": "application/json",
+            "api-key": api_key,
+            "content-type": "application/json"
+        }
+
+        for i, row in df.iterrows():
+            if selected_indices is not None and i not in selected_indices:
+                continue
+                
+            email_to = row.get("Email")
+            if pd.isna(email_to) or not str(email_to).strip(): continue
+            
+            name_val = str(row.get("Name", f"Cert_{i}"))
+            safe_name = re.sub(r'[^a-zA-Z0-9]', '_', name_val)
+            file_name = f"{i}_{safe_name}.png"
+            file_path = os.path.join(s_dir, file_name)
+            
+            if not os.path.exists(file_path): continue
+            
+            # Read and encode attachment
+            with open(file_path, "rb") as f:
+                b64_content = base64.b64encode(f.read()).decode()
+
+            payload = {
+                "sender": {"email": sender_email},
+                "to": [{"email": str(email_to), "name": name_val}],
+                "subject": subject,
+                "textContent": body.format(Name=name_val),
+                "attachment": [{
+                    "content": b64_content,
+                    "name": file_name
+                }]
+            }
+            
+            try:
+                response = requests.post(url, headers=headers, json=payload)
+                if response.status_code >= 400:
+                    print(f"Brevo Error for {email_to}: {response.text}")
+                else:
+                    print(f"Sent via API to {email_to}")
+            except Exception as e:
+                print(f"API Request failed for {email_to}: {e}")
+
+        tasks_status[session_id] = "completed"
+    except Exception as e:
+        traceback.print_exc()
+        tasks_status[session_id] = "failed"
+
+def email_task(session_id, sender_email, sender_password, subject, body, selected_indices=None):
+    # Retrieve environment variables as defaults
+    env_api_key = os.getenv("BREVO_API_KEY")
+    env_sender = os.getenv("SENDER_EMAIL")
+    env_password = os.getenv("SENDER_PASSWORD")
+
+    # Clean inputs
+    sender_email = sender_email.strip() if sender_email else ""
+    sender_password = sender_password.strip() if sender_password else ""
+
+    # Determine which credentials to use
+    api_key = env_api_key
+    # If the user provided a "password" that looks like a Brevo API key, use it
+    if sender_password and (sender_password.startswith("xkeysib-") or sender_password.startswith("xsmtpsib-")):
+        api_key = sender_password
     
-    # Use environment variables if not provided
-    sender_email = sender_email or os.getenv("SENDER_EMAIL")
-    sender_password = sender_password or os.getenv("SENDER_PASSWORD")
+    sender_email = sender_email or env_sender
+    
+    # CASE 1: Use Brevo API (Recommended for Render)
+    if api_key:
+        print(f"Using Brevo API for delivery (Sender: {sender_email})...")
+        send_via_api(session_id, api_key, sender_email, subject, body, selected_indices)
+        return
+
+    # CASE 2: Fallback to SMTP (e.g. Gmail)
+    tasks_status[session_id] = "sending"
+    sender_password = sender_password or env_password
     
     if not sender_email or not sender_password:
-        print("Missing email credentials.")
+        print("Error: No email credentials provided (missing BREVO_API_KEY or SMTP credentials).")
         tasks_status[session_id] = "failed"
         return
 
@@ -277,9 +361,8 @@ def email_task(session_id, sender_email, sender_password, subject, body, selecte
         # Try Port 465 first (SSL)
         server = None
         try:
-            print(f"Connecting to smtp.gmail.com:587 (SSL)...")
-            server = smtplib.SMTP("smtp.gmail.com", 587, timeout=30)
-            server.starttls(context=context)
+            print(f"Connecting to smtp.gmail.com:465 (SSL)...")
+            server = smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=30)
             server.login(sender_email, sender_password)
         except Exception as e:
             print(f"SSL move failed: {e}. Trying Port 587 (STARTTLS)...")
@@ -335,8 +418,8 @@ def email_task(session_id, sender_email, sender_password, subject, body, selecte
 async def send_emails(
     background_tasks: BackgroundTasks,
     session_id: str = Form(...),
-    sender_email: str = Form(...),
-    sender_password: str = Form(...),
+    sender_email: str = Form(""),
+    sender_password: str = Form(""),
     subject: str = Form(...),
     body: str = Form(...),
     selected_indices: str = Form("[]")
