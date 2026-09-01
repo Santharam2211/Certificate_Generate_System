@@ -11,18 +11,9 @@ import shutil
 import uuid
 import json
 import traceback
-import smtplib
-import ssl
+import traceback
 import base64
 import requests
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 app = FastAPI()
 
@@ -52,53 +43,135 @@ def parse_color(color_str):
         return tuple(int(color_str[i:i+2], 16) for i in (0, 2, 4))
     return (0, 0, 0)
 
-def draw_justified_text(draw, text, font, color, container_width, x, y, placeholders_config=None, row_data=None):
-    tokens = []
+def draw_justified_text(draw, text, font, bold_font, color, container_width, x, y, placeholders_config=None, row_data=None):
+    """
+    Render justified text on a certificate image.
+    Placeholders like {Name} are replaced from row_data and can have
+    individual font/color overrides.
+    """
+    if row_data is None: row_data = {}
+    if placeholders_config is None: placeholders_config = {}
+
+    # 1. Parse segments
+    segments = []
     parts = re.split(r'(\{[a-zA-Z0-9 \&]+\})', text)
-    
-    for p in parts:
-        if p.startswith('{') and p.endswith('}'):
-            key = p[1:-1]
-            val = str(row_data.get(key, p))
-            tokens.append((val, True, key))
+    for part in parts:
+        if not part: continue
+        if part.startswith('{') and part.endswith('}'):
+            key = part[1:-1]
+            val = str(row_data.get(key, part))
+            ph_cfg = placeholders_config.get(key, {})
+            if isinstance(ph_cfg, dict):
+                w_font = bold_font if ph_cfg.get('bold') else font
+                w_color = parse_color(ph_cfg.get('color', '#000000'))
+            else:
+                w_font = font
+                w_color = color
+            segments.append((val, w_font, w_color))
         else:
-            tokens.append((p, False, None))
-            
+            segments.append((part, font, color))
+
+    # 2. Group into Words (Word = list of (string, font, color))
+    items = []
+    current_word = []
+    for seg_text, seg_font, seg_color in segments:
+        tokens = re.split(r'(\s+)', seg_text)
+        for tok in tokens:
+            if not tok: continue
+            if tok.isspace():
+                if current_word:
+                    items.append(current_word)
+                    current_word = []
+                items.append("SPACE")
+            else:
+                current_word.append((tok, seg_font, seg_color))
+    if current_word:
+        items.append(current_word)
+
+    # Filter consecutive spaces
+    filtered_items = []
+    for item in items:
+        if item == "SPACE":
+            if not filtered_items or filtered_items[-1] != "SPACE":
+                filtered_items.append("SPACE")
+        else:
+            filtered_items.append(item)
+    if filtered_items and filtered_items[0] == "SPACE": filtered_items.pop(0)
+    if filtered_items and filtered_items[-1] == "SPACE": filtered_items.pop()
+
+    # 3. Wrap lines
+    space_w = draw.textlength(' ', font=font)
+    def get_word_width(wg):
+        return sum(draw.textlength(t, font=f) for t, f, c in wg)
+
     lines = []
     current_line = []
-    current_width = 0
-    space_width = draw.textlength(" ", font=font)
-    
-    for text_val, is_ph, ph_key in tokens:
-        words_in_token = text_val.split(' ')
-        for i, word in enumerate(words_in_token):
-            if not word and i > 0: continue
-            word_w = draw.textlength(word, font=font)
-            if current_width + word_w <= container_width:
-                current_line.append((word, is_ph, ph_key))
-                current_width += word_w + space_width
-            else:
-                if current_line: lines.append(current_line)
-                current_line = [(word, is_ph, ph_key)]
-                current_width = word_w + space_width
-    if current_line: lines.append(current_line)
+    current_line_width = 0
+
+    for item in filtered_items:
+        if item == "SPACE": continue
+        wg = item
+        w_width = get_word_width(wg)
+        needed = w_width + (space_w if current_line else 0)
         
-    for i, line in enumerate(lines):
-        if i == len(lines) - 1 or len(line) == 1:
-            curr_x = x
-            for word, is_ph, ph_key in line:
-                c = parse_color(placeholders_config.get(ph_key, "#000000")) if is_ph else color
-                draw.text((curr_x, y), word, font=font, fill=c)
-                curr_x += draw.textlength(word, font=font) + space_width
+        if current_line_width + needed <= container_width or not current_line:
+            current_line.append(wg)
+            current_line_width += needed
         else:
-            total_words_width = sum(draw.textlength(w[0], font=font) for w in line)
+            lines.append(current_line)
+            current_line = [wg]
+            current_line_width = w_width
+
+    if current_line:
+        lines.append(current_line)
+
+    # 4. Draw
+    for line_idx, line in enumerate(lines):
+        is_last = (line_idx == len(lines) - 1)
+        
+        if is_last or len(line) == 1:
+            curr_x = x
+            for wg in line:
+                for text_part, f, c in wg:
+                    draw.text((curr_x, y), text_part, font=f, fill=c)
+                    curr_x += draw.textlength(text_part, font=f)
+                curr_x += space_w
+        else:
+            total_words_width = sum(get_word_width(wg) for wg in line)
             gap = (container_width - total_words_width) / (len(line) - 1)
             curr_x = x
-            for word, is_ph, ph_key in line:
-                c = parse_color(placeholders_config.get(ph_key, "#000000")) if is_ph else color
-                draw.text((curr_x, y), word, font=font, fill=c)
-                curr_x += draw.textlength(word, font=font) + gap
+            for wg_idx, wg in enumerate(line):
+                for text_part, f, c in wg:
+                    draw.text((curr_x, y), text_part, font=f, fill=c)
+                    curr_x += draw.textlength(text_part, font=f)
+                if wg_idx < len(line) - 1:
+                    curr_x += gap
+                    
         y += font.size * 1.5
+
+def get_bold_font(font_name, size):
+    # 1. Try standard Regular→Bold name substitution
+    bold_name = font_name.replace('Regular', 'Bold').replace('regular', 'bold')
+    if bold_name != font_name and os.path.exists(os.path.join(FONTS_DIR, bold_name)):
+        return ImageFont.truetype(os.path.join(FONTS_DIR, bold_name), size)
+
+    # 2. Try common bold suffix patterns on the base filename
+    base, ext = os.path.splitext(font_name)
+    for suffix in ['b', 'B', 'bd', 'Bold', '-Bold']:
+        path = os.path.join(FONTS_DIR, base + suffix + ext)
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size)
+
+    # 3. Fall back to Arial Bold (guaranteed to look bold, consistent fallback)
+    arialbd_path = os.path.join(FONTS_DIR, 'arialbd.ttf')
+    if os.path.exists(arialbd_path):
+        try:
+            return ImageFont.truetype(arialbd_path, size)
+        except Exception:
+            pass
+
+    # 4. Last resort: use whatever the regular font is
+    return get_font(font_name, size)
 
 def get_font(font_name, size):
     path = os.path.join(FONTS_DIR, font_name)
@@ -118,9 +191,18 @@ def get_font(font_name, size):
     except: pass
     return ImageFont.load_default()
 
-# =========================================================
-# 🚀 ENDPOINTS
-# =========================================================
+def build_filename(pattern, serial, name, roll, index, ext):
+    """Resolve filename pattern tokens and sanitize the result."""
+    result = pattern
+    result = result.replace("{serial}", str(serial))
+    result = result.replace("{name}", str(name))
+    result = result.replace("{roll}", str(roll))
+    result = result.replace("{index}", str(index))
+    # Strip characters that are illegal in filenames
+    result = re.sub(r'[<>:"/\\|?*]', '_', result)
+    return f"{result}.{ext.lower()}"
+
+
 
 @app.get("/")
 async def health_check():
@@ -147,6 +229,7 @@ async def preview_certificate(
         ph_config = json.loads(placeholders)
         base_img = Image.open(io.BytesIO(await template.read())).convert("RGB")
         font = get_font(font_name, font_size)
+        bold_font = get_bold_font(font_name, font_size)
         main_color = parse_color(font_color)
         
         # Row data for preview - just show the keys as examples
@@ -159,7 +242,7 @@ async def preview_certificate(
             dummy_row["Prefix"] = "Selvan/Selvi"
             
         draw = ImageDraw.Draw(base_img)
-        draw_justified_text(draw, content, font, main_color, width, x, y, ph_config, dummy_row)
+        draw_justified_text(draw, content, font, bold_font, main_color, width, x, y, ph_config, dummy_row)
         
         buf = io.BytesIO()
         base_img.save(buf, format='PNG')
@@ -178,9 +261,12 @@ async def generate_certificates(
     font_size: int = Form(20),
     font_color: str = Form("#000000"),
     placeholders: str = Form("{}"),
+    start_serial_number: int = Form(215),
     x: int = Form(300),
     y: int = Form(800),
-    width: int = Form(1400)
+    width: int = Form(1400),
+    output_format: str = Form("PDF"),
+    filename_pattern: str = Form("{serial}_CSE_{roll}_AWS")
 ):
     try:
         ph_config = json.loads(placeholders)
@@ -196,6 +282,7 @@ async def generate_certificates(
         df = pd.read_excel(io.BytesIO(excel_bytes))
         base_img = Image.open(io.BytesIO(await template.read())).convert("RGB")
         font = get_font(font_name, font_size)
+        bold_font = get_bold_font(font_name, font_size)
         main_color = parse_color(font_color)
         
         generated = []
@@ -210,13 +297,20 @@ async def generate_certificates(
             elif "male" in gender: prefix = "Selvan"
             row_dict["Prefix"] = prefix
             
-            draw_justified_text(ImageDraw.Draw(img), content, font, main_color, width, x, y, ph_config, row_dict)
+            draw_justified_text(ImageDraw.Draw(img), content, font, bold_font, main_color, width, x, y, ph_config, row_dict)
             
             # Save mapping info
             name_val = str(row.get("Name", f"Cert_{i}"))
-            safe_name = re.sub(r'[^a-zA-Z0-9]', '_', name_val)
-            file_name = f"{i}_{safe_name}.png"
-            img.save(os.path.join(s_dir, file_name))
+            serial_number = start_serial_number + i
+            roll_number = str(row.get("RollNumber", str(row.get("Roll Number", "UNKNOWN"))))
+            
+            if output_format.upper() == "PDF":
+                file_name = build_filename(filename_pattern, serial_number, name_val, roll_number, i, "pdf")
+                img.save(os.path.join(s_dir, file_name), format='PDF', resolution=300.0)
+            else:
+                file_name = build_filename(filename_pattern, serial_number, name_val, roll_number, i, "png")
+                img.save(os.path.join(s_dir, file_name), format='PNG')
+                
             generated.append({
                 "index": i,
                 "name": name_val,
@@ -243,203 +337,7 @@ async def download(s_id: str):
     if os.path.exists(path): return FileResponse(path, filename="certificates.zip")
     return JSONResponse(status_code=404, content={"error": "Not found"})
 
-from fastapi import BackgroundTasks
-import smtplib
-import ssl
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
 
-# Global status tracker
-tasks_status = {}
-
-def send_via_api(session_id, api_key, sender_email, subject, body, selected_indices=None):
-    """Sends emails via Brevo HTTP API (Works on Render)"""
-    tasks_status[session_id] = "sending"
-    try:
-        s_dir = os.path.join(OUTPUT_DIR, session_id)
-        excel_path = os.path.join(s_dir, "data.xlsx")
-        if not os.path.exists(excel_path):
-            tasks_status[session_id] = "failed"
-            return
-            
-        df = pd.read_excel(excel_path)
-        url = "https://api.brevo.com/v3/smtp/email"
-        headers = {
-            "accept": "application/json",
-            "api-key": api_key,
-            "content-type": "application/json"
-        }
-
-        for i, row in df.iterrows():
-            if selected_indices is not None and i not in selected_indices:
-                continue
-                
-            email_to = row.get("Email")
-            if pd.isna(email_to) or not str(email_to).strip(): continue
-            
-            name_val = str(row.get("Name", f"Cert_{i}"))
-            safe_name = re.sub(r'[^a-zA-Z0-9]', '_', name_val)
-            file_name = f"{i}_{safe_name}.png"
-            file_path = os.path.join(s_dir, file_name)
-            
-            if not os.path.exists(file_path): continue
-            
-            # Read and encode attachment
-            with open(file_path, "rb") as f:
-                b64_content = base64.b64encode(f.read()).decode()
-
-            payload = {
-                "sender": {"email": sender_email},
-                "to": [{"email": str(email_to), "name": name_val}],
-                "subject": subject,
-                "textContent": body.format(Name=name_val),
-                "attachment": [{
-                    "content": b64_content,
-                    "name": file_name
-                }]
-            }
-            
-            try:
-                response = requests.post(url, headers=headers, json=payload)
-                if response.status_code >= 400:
-                    print(f"Brevo Error for {email_to}: {response.text}")
-                else:
-                    print(f"Sent via API to {email_to}")
-            except Exception as e:
-                print(f"API Request failed for {email_to}: {e}")
-
-        tasks_status[session_id] = "completed"
-    except Exception as e:
-        traceback.print_exc()
-        tasks_status[session_id] = "failed"
-
-def email_task(session_id, sender_email, sender_password, subject, body, selected_indices=None):
-    # Retrieve environment variables as defaults
-    env_api_key = os.getenv("BREVO_API_KEY")
-    env_sender = os.getenv("SENDER_EMAIL")
-    env_password = os.getenv("SENDER_PASSWORD")
-
-    # Clean inputs
-    sender_email = sender_email.strip() if sender_email else ""
-    sender_password = sender_password.strip() if sender_password else ""
-
-    # Determine which credentials to use
-    api_key = env_api_key
-    # If the user provided a "password" that looks like a Brevo API key, use it
-    if sender_password and (sender_password.startswith("xkeysib-") or sender_password.startswith("xsmtpsib-")):
-        api_key = sender_password
-    
-    sender_email = sender_email or env_sender
-    
-    # CASE 1: Use Brevo API (Recommended for Render)
-    if api_key:
-        print(f"Using Brevo API for delivery (Sender: {sender_email})...")
-        send_via_api(session_id, api_key, sender_email, subject, body, selected_indices)
-        return
-
-    # CASE 2: Fallback to SMTP (e.g. Gmail)
-    tasks_status[session_id] = "sending"
-    sender_password = sender_password or env_password
-    
-    if not sender_email or not sender_password:
-        print("Error: No email credentials provided (missing BREVO_API_KEY or SMTP credentials).")
-        tasks_status[session_id] = "failed"
-        return
-
-    try:
-        s_dir = os.path.join(OUTPUT_DIR, session_id)
-        excel_path = os.path.join(s_dir, "data.xlsx")
-        if not os.path.exists(excel_path): 
-            tasks_status[session_id] = "failed"
-            return
-            
-        df = pd.read_excel(excel_path)
-        context = ssl.create_default_context()
-        
-        # Try Port 465 first (SSL)
-        server = None
-        try:
-            print(f"Connecting to smtp.gmail.com:465 (SSL)...")
-            server = smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=30)
-            server.login(sender_email, sender_password)
-        except Exception as e:
-            print(f"SSL move failed: {e}. Trying Port 587 (STARTTLS)...")
-            try:
-                server = smtplib.SMTP("smtp.gmail.com", 587, timeout=30)
-                server.starttls(context=context)
-                server.login(sender_email, sender_password)
-            except Exception as e2:
-                print(f"Both SMTP ports failed: {e2}")
-                tasks_status[session_id] = "failed"
-                return
-
-        with server:
-            for i, row in df.iterrows():
-                if selected_indices is not None and i not in selected_indices:
-                    continue
-                    
-                email_to = row.get("Email")
-                if pd.isna(email_to) or not str(email_to).strip(): continue
-                
-                name_val = str(row.get("Name", f"Cert_{i}"))
-                safe_name = re.sub(r'[^a-zA-Z0-9]', '_', name_val)
-                file_name = f"{i}_{safe_name}.png"
-                file_path = os.path.join(s_dir, file_name)
-                
-                if not os.path.exists(file_path): continue
-                
-                msg = MIMEMultipart()
-                msg['From'] = sender_email
-                msg['To'] = str(email_to)
-                msg['Subject'] = subject
-                msg.attach(MIMEText(body.format(Name=name_val), 'plain'))
-                
-                with open(file_path, "rb") as f:
-                    part = MIMEBase('application', 'octet-stream')
-                    part.set_payload(f.read())
-                    encoders.encode_base64(part)
-                    part.add_header('Content-Disposition', f"attachment; filename={file_name}")
-                    msg.attach(part)
-                
-                try:
-                    server.send_message(msg)
-                    print(f"Sent email to {email_to}")
-                except Exception as e:
-                    print(f"Failed to send to {email_to}: {e}")
-                    pass
-        tasks_status[session_id] = "completed"
-    except Exception as e:
-        traceback.print_exc()
-        tasks_status[session_id] = "failed"
-
-@app.post("/send-emails")
-async def send_emails(
-    background_tasks: BackgroundTasks,
-    session_id: str = Form(...),
-    sender_email: str = Form(""),
-    sender_password: str = Form(""),
-    subject: str = Form(...),
-    body: str = Form(...),
-    selected_indices: str = Form("[]")
-):
-    s_dir = os.path.join(OUTPUT_DIR, session_id)
-    if not os.path.exists(s_dir):
-        return JSONResponse(status_code=404, content={"error": "Session not found"})
-        
-    try:
-        indices = json.loads(selected_indices)
-    except:
-        indices = None
-        
-    background_tasks.add_task(email_task, session_id, sender_email, sender_password, subject, body, indices)
-    return {"message": "Background sending started", "status": "success"}
-
-@app.get("/email-status/{session_id}")
-async def get_email_status(session_id: str):
-    status = tasks_status.get(session_id, "unknown")
-    return {"status": status}
 
 if __name__ == "__main__":
     import uvicorn
