@@ -43,62 +43,101 @@ def parse_color(color_str):
         return tuple(int(color_str[i:i+2], 16) for i in (0, 2, 4))
     return (0, 0, 0)
 
+UNICODE_SUP = {
+    '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
+    '⁺': '+', '⁻': '-', '⁼': '=', '⁽': '(', '⁾': ')', 'ⁿ': 'n', 'ⁱ': 'i',
+    'ᵃ': 'a', 'ᵇ': 'b', 'ᶜ': 'c', 'ᵈ': 'd', 'ᵉ': 'e', 'ᶠ': 'f', 'ᵍ': 'g', 'ʰ': 'h', 'ʲ': 'j', 'ᵏ': 'k',
+    'ˡ': 'l', 'ᵐ': 'm', 'ᵒ': 'o', 'ᵖ': 'p', 'ʳ': 'r', 'ˢ': 's', 'ᵗ': 't', 'ᵘ': 'u', 'ᵛ': 'v', 'ʷ': 'w',
+    'ˣ': 'x', 'ʸ': 'y', 'ᶻ': 'z',
+    'ᴬ': 'A', 'ᴮ': 'B', 'ᴰ': 'D', 'ᴱ': 'E', 'ᴳ': 'G', 'ᴴ': 'H', 'ᴵ': 'I', 'ᴶ': 'J', 'ᴷ': 'K', 'ᴸ': 'L',
+    'ᴹ': 'M', 'ᴺ': 'N', 'ᴼ': 'O', 'ᴾ': 'P', 'ᴿ': 'R', 'ᵀ': 'T', 'ᵁ': 'U', 'ⱽ': 'V', 'ᵂ': 'W'
+}
+
+UNICODE_SUB = {
+    '₀': '0', '₁': '1', '₂': '2', '₃': '3', '₄': '4', '₅': '5', '₆': '6', '₇': '7', '₈': '8', '₉': '9',
+    '₊': '+', '₋': '-', '₌': '=', '₍': '(', '₎': ')', 'ₐ': 'a', 'ₑ': 'e', 'ₕ': 'h', 'ᵢ': 'i', 'ⱼ': 'j',
+    'ₖ': 'k', 'ₗ': 'l', 'ₘ': 'm', 'ₙ': 'n', 'ₒ': 'o', 'ₚ': 'p', 'ᵣ': 'r', 'ₛ': 's', 'ₜ': 't', 'ᵤ': 'u',
+    'ᵥ': 'v', 'ₓ': 'x'
+}
+
+def normalize_sub_sup(text: str) -> str:
+    """
+    Normalizes Unicode subscript/superscript characters, markdown notation (^sup^, ~sub~),
+    and case-insensitive HTML tags (<SUP>, <SUB>) into standard <sup> and <sub> tags.
+    """
+    if not text:
+        return ""
+    text = str(text)
+
+    # 1. Unicode superscripts -> <sup>...</sup>
+    sup_pattern = '[' + ''.join(re.escape(k) for k in UNICODE_SUP.keys()) + ']+'
+    text = re.sub(sup_pattern, lambda m: '<sup>' + ''.join(UNICODE_SUP.get(c, c) for c in m.group(0)) + '</sup>', text)
+
+    # 2. Unicode subscripts -> <sub>...</sub>
+    sub_pattern = '[' + ''.join(re.escape(k) for k in UNICODE_SUB.keys()) + ']+'
+    text = re.sub(sub_pattern, lambda m: '<sub>' + ''.join(UNICODE_SUB.get(c, c) for c in m.group(0)) + '</sub>', text)
+
+    # 3. Markdown ^...^ for sup and ~...~ for sub
+    text = re.sub(r'\^([^^]+)\^', r'<sup>\1</sup>', text)
+    text = re.sub(r'~([^~]+)~', r'<sub>\1</sub>', text)
+
+    # 4. Standardize HTML tags to lowercase <sup> and <sub>
+    text = re.sub(r'<\s*sup\s*>', '<sup>', text, flags=re.IGNORECASE)
+    text = re.sub(r'<\s*/\s*sup\s*>', '</sup>', text, flags=re.IGNORECASE)
+    text = re.sub(r'<\s*sub\s*>', '<sub>', text, flags=re.IGNORECASE)
+    text = re.sub(r'<\s*/\s*sub\s*>', '</sub>', text, flags=re.IGNORECASE)
+    return text
+
 def parse_subscript_superscript(text, base_font, base_color):
     """
-    Parse text for <sub> and <sup> tags and return a list of segments.
+    Parse text for <sub> and <sup> tags (and normalized Unicode/Markdown variants)
+    and return a list of segments.
     Each segment is (text, font, color, y_offset)
-    y_offset: 0 for normal, positive for subscript, negative for superscript
+    y_offset: 0 for normal baseline, negative for superscript elevation, positive for subscript drop
     """
+    text = normalize_sub_sup(text)
     segments = []
-    # Pattern to match <sub>...</sub> and <sup>...</sup>
     pattern = r'(<(sub|sup)>(.*?)</\2>)'
-    
+
+    # Font metrics for precise typographic baseline alignment
+    try:
+        ascent, _ = base_font.getmetrics()
+    except Exception:
+        ascent = int(base_font.size * 0.8)
+
+    sub_sup_size = max(8, int(base_font.size * 0.58))
+    try:
+        if hasattr(base_font, 'path') and base_font.path:
+            sub_sup_font = ImageFont.truetype(base_font.path, sub_sup_size)
+        else:
+            sub_sup_font = base_font.font_variant(size=sub_sup_size)
+    except Exception:
+        sub_sup_font = base_font
+
+    sup_offset = -int(ascent * 0.45)
+    sub_offset = int(ascent * 0.22)
+
     last_end = 0
     for match in re.finditer(pattern, text, re.DOTALL):
-        # Add text before the tag
         if match.start() > last_end:
             normal_text = text[last_end:match.start()]
             if normal_text:
                 segments.append((normal_text, base_font, base_color, 0))
-        
-        # Process the tag content
-        tag_type = match.group(2)  # 'sub' or 'sup'
+
+        tag_type = match.group(2).lower()
         tag_content = match.group(3)
-        
-        # Create smaller font for subscript/superscript (60% of base size)
-        sub_sup_size = int(base_font.size * 0.6)
-        # Try to use the base font's path if available, otherwise use font_variant
-        try:
-            if hasattr(base_font, 'path'):
-                sub_sup_font = ImageFont.truetype(base_font.path, sub_sup_size)
-            else:
-                sub_sup_font = base_font.font_variant(size=sub_sup_size)
-        except:
-            # Fallback to base font
-            sub_sup_font = base_font
-        
-        # Calculate y offset
-        # Subscript: move down by 30% of base font size
-        # Superscript: move up by 30% of base font size
-        if tag_type == 'sub':
-            y_offset = int(base_font.size * 0.3)
-        else:  # sup
-            y_offset = -int(base_font.size * 0.3)
-        
+        y_offset = sub_offset if tag_type == 'sub' else sup_offset
         segments.append((tag_content, sub_sup_font, base_color, y_offset))
-        
         last_end = match.end()
-    
-    # Add remaining text after last tag
+
     if last_end < len(text):
         remaining_text = text[last_end:]
         if remaining_text:
             segments.append((remaining_text, base_font, base_color, 0))
-    
-    # If no tags found, return entire text as normal
+
     if not segments:
         segments.append((text, base_font, base_color, 0))
-    
+
     return segments
 
 def draw_justified_text(draw, text, font, bold_font, color, container_width, x, y, placeholders_config=None, row_data=None):
@@ -106,10 +145,13 @@ def draw_justified_text(draw, text, font, bold_font, color, container_width, x, 
     Render justified text on a certificate image.
     Placeholders like {Name} are replaced from row_data and can have
     individual font/color overrides.
-    Supports <sub> and <sup> tags for subscript and superscript.
+    Supports <sub> and <sup> tags, markdown ^sup^/~sub~, and Unicode superscript/subscript.
+    Uses typographic baseline anchoring for crisp, aligned typography.
     """
     if row_data is None: row_data = {}
     if placeholders_config is None: placeholders_config = {}
+
+    text = normalize_sub_sup(text)
 
     # 1. Parse segments (placeholders first)
     segments = []
@@ -118,7 +160,7 @@ def draw_justified_text(draw, text, font, bold_font, color, container_width, x, 
         if not part: continue
         if part.startswith('{') and part.endswith('}'):
             key = part[1:-1]
-            val = str(row_data.get(key, part))
+            val = normalize_sub_sup(str(row_data.get(key, part)))
             ph_cfg = placeholders_config.get(key, {})
             if isinstance(ph_cfg, dict):
                 w_font = bold_font if ph_cfg.get('bold') else font
@@ -126,11 +168,9 @@ def draw_justified_text(draw, text, font, bold_font, color, container_width, x, 
             else:
                 w_font = font
                 w_color = color
-            # Parse subscript/superscript within the placeholder value
             sub_segments = parse_subscript_superscript(val, w_font, w_color)
             segments.extend(sub_segments)
         else:
-            # Parse subscript/superscript within regular text
             sub_segments = parse_subscript_superscript(part, font, color)
             segments.extend(sub_segments)
 
@@ -176,7 +216,7 @@ def draw_justified_text(draw, text, font, bold_font, color, container_width, x, 
         wg = item
         w_width = get_word_width(wg)
         needed = w_width + (space_w if current_line else 0)
-        
+
         if current_line_width + needed <= container_width or not current_line:
             current_line.append(wg)
             current_line_width += needed
@@ -188,15 +228,21 @@ def draw_justified_text(draw, text, font, bold_font, color, container_width, x, 
     if current_line:
         lines.append(current_line)
 
-    # 4. Draw
+    # 4. Draw with baseline alignment (anchor='ls')
+    try:
+        base_ascent, _ = font.getmetrics()
+    except Exception:
+        base_ascent = int(font.size * 0.8)
+
     for line_idx, line in enumerate(lines):
         is_last = (line_idx == len(lines) - 1)
-        
+        baseline_y = y + base_ascent
+
         if is_last or len(line) == 1:
             curr_x = x
             for wg in line:
                 for text_part, f, c, y_off in wg:
-                    draw.text((curr_x, y + y_off), text_part, font=f, fill=c)
+                    draw.text((curr_x, baseline_y + y_off), text_part, font=f, fill=c, anchor="ls")
                     curr_x += draw.textlength(text_part, font=f)
                 curr_x += space_w
         else:
@@ -205,11 +251,11 @@ def draw_justified_text(draw, text, font, bold_font, color, container_width, x, 
             curr_x = x
             for wg_idx, wg in enumerate(line):
                 for text_part, f, c, y_off in wg:
-                    draw.text((curr_x, y + y_off), text_part, font=f, fill=c)
+                    draw.text((curr_x, baseline_y + y_off), text_part, font=f, fill=c, anchor="ls")
                     curr_x += draw.textlength(text_part, font=f)
                 if wg_idx < len(line) - 1:
                     curr_x += gap
-                    
+
         y += font.size * 1.5
 
 def get_bold_font(font_name, size):
