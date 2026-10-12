@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Download, Send, Plus, Trash2, Settings, Mail, Eye, Search, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
+import { Upload, Download, Send, Plus, Trash2, Settings, Mail, Eye, Search, CheckCircle2, AlertCircle, RefreshCw, Type } from 'lucide-react';
 
 function App() {
   const [template, setTemplate] = useState(null);
@@ -207,7 +207,7 @@ function App() {
         } />
       )}
       <header>
-        <h1>CertifyPro</h1>
+        <h1>CertificateHub</h1>
         <p style={{ color: 'var(--text-dim)' }}>Premium Digital Certificate Automation</p>
       </header>
 
@@ -263,6 +263,27 @@ function App() {
             <div className="form-group">
               <label>Body Content (use {'{Prefix}, {Name}'} etc)</label>
               <textarea rows={4} value={content} onChange={e => setContent(e.target.value)} />
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
+                <button
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.75rem', padding: '4px 12px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  onClick={() => setContent(prev => prev + '<sub>text</sub>')}
+                >
+                  <Type size={12} /> Subscript
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.75rem', padding: '4px 12px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  onClick={() => setContent(prev => prev + '<sup>text</sup>')}
+                >
+                  <Type size={12} /> Superscript
+                </button>
+              </div>
+              <div style={{ marginTop: '8px', padding: '8px', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '6px', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+                <p style={{ fontSize: '0.7rem', color: '#60a5fa', margin: 0 }}>
+                  <strong>💡 Tip:</strong> Use <code style={{ background: 'rgba(0,0,0,0.2)', padding: '2px 4px', borderRadius: '3px' }}>&lt;sub&gt;text&lt;/sub&gt;</code> for subscript (e.g., H<sub>2</sub>O) and <code style={{ background: 'rgba(0,0,0,0.2)', padding: '2px 4px', borderRadius: '3px' }}>&lt;sup&gt;text&lt;/sup&gt;</code> for superscript (e.g., E=mc<sup>2</sup>). Works in both preview and PDF downloads.
+                </p>
+              </div>
             </div>
 
             <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
