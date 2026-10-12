@@ -43,16 +43,75 @@ def parse_color(color_str):
         return tuple(int(color_str[i:i+2], 16) for i in (0, 2, 4))
     return (0, 0, 0)
 
+def parse_subscript_superscript(text, base_font, base_color):
+    """
+    Parse text for <sub> and <sup> tags and return a list of segments.
+    Each segment is (text, font, color, y_offset)
+    y_offset: 0 for normal, positive for subscript, negative for superscript
+    """
+    segments = []
+    # Pattern to match <sub>...</sub> and <sup>...</sup>
+    pattern = r'(<(sub|sup)>(.*?)</\2>)'
+    
+    last_end = 0
+    for match in re.finditer(pattern, text, re.DOTALL):
+        # Add text before the tag
+        if match.start() > last_end:
+            normal_text = text[last_end:match.start()]
+            if normal_text:
+                segments.append((normal_text, base_font, base_color, 0))
+        
+        # Process the tag content
+        tag_type = match.group(2)  # 'sub' or 'sup'
+        tag_content = match.group(3)
+        
+        # Create smaller font for subscript/superscript (60% of base size)
+        sub_sup_size = int(base_font.size * 0.6)
+        # Try to use the base font's path if available, otherwise use font_variant
+        try:
+            if hasattr(base_font, 'path'):
+                sub_sup_font = ImageFont.truetype(base_font.path, sub_sup_size)
+            else:
+                sub_sup_font = base_font.font_variant(size=sub_sup_size)
+        except:
+            # Fallback to base font
+            sub_sup_font = base_font
+        
+        # Calculate y offset
+        # Subscript: move down by 30% of base font size
+        # Superscript: move up by 30% of base font size
+        if tag_type == 'sub':
+            y_offset = int(base_font.size * 0.3)
+        else:  # sup
+            y_offset = -int(base_font.size * 0.3)
+        
+        segments.append((tag_content, sub_sup_font, base_color, y_offset))
+        
+        last_end = match.end()
+    
+    # Add remaining text after last tag
+    if last_end < len(text):
+        remaining_text = text[last_end:]
+        if remaining_text:
+            segments.append((remaining_text, base_font, base_color, 0))
+    
+    # If no tags found, return entire text as normal
+    if not segments:
+        segments.append((text, base_font, base_color, 0))
+    
+    return segments
+
 def draw_justified_text(draw, text, font, bold_font, color, container_width, x, y, placeholders_config=None, row_data=None):
     """
     Render justified text on a certificate image.
     Placeholders like {Name} are replaced from row_data and can have
     individual font/color overrides.
+    Supports <sub> and <sup> tags for subscript and superscript.
     """
     if row_data is None: row_data = {}
     if placeholders_config is None: placeholders_config = {}
 
-    # 1. Parse segments
+    # 1. Parse segments (placeholders first)
     segments = []
     parts = re.split(r'(\{[a-zA-Z0-9 \&]+\})', text)
     for part in parts:
@@ -67,14 +126,18 @@ def draw_justified_text(draw, text, font, bold_font, color, container_width, x, 
             else:
                 w_font = font
                 w_color = color
-            segments.append((val, w_font, w_color))
+            # Parse subscript/superscript within the placeholder value
+            sub_segments = parse_subscript_superscript(val, w_font, w_color)
+            segments.extend(sub_segments)
         else:
-            segments.append((part, font, color))
+            # Parse subscript/superscript within regular text
+            sub_segments = parse_subscript_superscript(part, font, color)
+            segments.extend(sub_segments)
 
-    # 2. Group into Words (Word = list of (string, font, color))
+    # 2. Group into Words (Word = list of (string, font, color, y_offset))
     items = []
     current_word = []
-    for seg_text, seg_font, seg_color in segments:
+    for seg_text, seg_font, seg_color, y_offset in segments:
         tokens = re.split(r'(\s+)', seg_text)
         for tok in tokens:
             if not tok: continue
@@ -84,7 +147,7 @@ def draw_justified_text(draw, text, font, bold_font, color, container_width, x, 
                     current_word = []
                 items.append("SPACE")
             else:
-                current_word.append((tok, seg_font, seg_color))
+                current_word.append((tok, seg_font, seg_color, y_offset))
     if current_word:
         items.append(current_word)
 
@@ -102,7 +165,7 @@ def draw_justified_text(draw, text, font, bold_font, color, container_width, x, 
     # 3. Wrap lines
     space_w = draw.textlength(' ', font=font)
     def get_word_width(wg):
-        return sum(draw.textlength(t, font=f) for t, f, c in wg)
+        return sum(draw.textlength(t, font=f) for t, f, c, y_off in wg)
 
     lines = []
     current_line = []
@@ -132,8 +195,8 @@ def draw_justified_text(draw, text, font, bold_font, color, container_width, x, 
         if is_last or len(line) == 1:
             curr_x = x
             for wg in line:
-                for text_part, f, c in wg:
-                    draw.text((curr_x, y), text_part, font=f, fill=c)
+                for text_part, f, c, y_off in wg:
+                    draw.text((curr_x, y + y_off), text_part, font=f, fill=c)
                     curr_x += draw.textlength(text_part, font=f)
                 curr_x += space_w
         else:
@@ -141,8 +204,8 @@ def draw_justified_text(draw, text, font, bold_font, color, container_width, x, 
             gap = (container_width - total_words_width) / (len(line) - 1)
             curr_x = x
             for wg_idx, wg in enumerate(line):
-                for text_part, f, c in wg:
-                    draw.text((curr_x, y), text_part, font=f, fill=c)
+                for text_part, f, c, y_off in wg:
+                    draw.text((curr_x, y + y_off), text_part, font=f, fill=c)
                     curr_x += draw.textlength(text_part, font=f)
                 if wg_idx < len(line) - 1:
                     curr_x += gap
